@@ -52,13 +52,36 @@
     <div id="tab-tasks" class="tab-content active">
       <h2 style="margin-bottom:16px">Manage Tasks</h2>
       <p style="color:var(--toupee);font-size:14px;margin-bottom:20px">
-        These tasks apply to all locations. Deactivating a task hides it from future checklists but preserves history.
+        Global tasks appear on every store's checklist. Location tasks appear only at that store.
       </p>
+
+      <!-- Scope toggle -->
+      <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;align-items:center">
+        <div class="tabs" style="margin-bottom:0">
+          <button class="tab-btn active" id="scope-global-btn" onclick="setTaskScope('global', this)">All Stores</button>
+          <button class="tab-btn" id="scope-local-btn" onclick="setTaskScope('local', this)">Single Store</button>
+        </div>
+        <select class="form-input" id="task-location-filter"
+          style="display:none;width:auto;padding:8px 12px;font-size:14px"
+          onchange="loadTasks()">
+          <option value="">Select a location…</option>
+        </select>
+      </div>
+
       <div id="task-list"></div>
-      <div class="add-task-form" style="margin-top:16px">
-        <input class="form-input" type="text" id="new-task-name" placeholder="New task name…"
-          onkeydown="if(event.key==='Enter') addTask()">
-        <button class="btn btn-gradient btn-sm" onclick="addTask()">+ Add Task</button>
+
+      <!-- Add task form -->
+      <div style="margin-top:20px;background:var(--lights-out);border:1px solid var(--dark-stripe);border-radius:10px;padding:16px">
+        <h3 style="margin-bottom:12px;font-size:14px;color:var(--toupee);text-transform:uppercase;letter-spacing:0.05em">Add New Task</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input class="form-input" type="text" id="new-task-name" placeholder="Task name…"
+            style="flex:1;min-width:200px"
+            onkeydown="if(event.key==='Enter') addTask()">
+          <button class="btn btn-gradient btn-sm" onclick="addTask()">+ Add Task</button>
+        </div>
+        <div id="add-task-scope-note" style="margin-top:8px;font-size:12px;color:var(--toupee)">
+          Will be added to <strong style="color:var(--white)">all stores</strong>.
+        </div>
       </div>
     </div>
 
@@ -111,13 +134,41 @@
       if (session) showPanel(session.user.email);
     }
 
+    let allLocations = [];
+    let currentTaskScope = 'global';
+
     function showPanel(email) {
       document.getElementById('login-view').style.display = 'none';
       document.getElementById('admin-panel').classList.add('visible');
       document.getElementById('logout-btn').style.display = 'inline';
       document.getElementById('admin-email-display').textContent = `Signed in as ${email}`;
+      loadLocationsData().then(() => { loadTasks(); loadLocations(); });
+    }
+
+    async function loadLocationsData() {
+      const { data } = await db.from('locations').select('id, name').eq('active', true).order('sort_order');
+      allLocations = data || [];
+      const sel = document.getElementById('task-location-filter');
+      sel.innerHTML = '<option value="">Select a location…</option>';
+      allLocations.forEach(l => {
+        sel.innerHTML += `<option value="${l.id}">${l.name}</option>`;
+      });
+    }
+
+    function setTaskScope(scope, btn) {
+      currentTaskScope = scope;
+      document.querySelectorAll('#tab-tasks .tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const locFilter = document.getElementById('task-location-filter');
+      const note = document.getElementById('add-task-scope-note');
+      if (scope === 'local') {
+        locFilter.style.display = 'block';
+        note.innerHTML = 'Will be added to <strong style="color:var(--white)">selected store only</strong>.';
+      } else {
+        locFilter.style.display = 'none';
+        note.innerHTML = 'Will be added to <strong style="color:var(--white)">all stores</strong>.';
+      }
       loadTasks();
-      loadLocations();
     }
 
     async function logout() {
@@ -135,14 +186,55 @@
 
     // ---- TASKS ----
     async function loadTasks() {
-      const { data: tasks } = await db.from('tasks').select('*').order('order_index');
+      const el = document.getElementById('task-list');
+      el.innerHTML = '<div style="color:var(--toupee);font-size:13px;padding:8px 0">Loading…</div>';
+
+      if (currentTaskScope === 'global') {
+        const { data: tasks } = await db.from('tasks')
+          .select('*').is('location_id', null).order('order_index');
+        renderTaskList(tasks || [], null);
+      } else {
+        const locId = document.getElementById('task-location-filter').value;
+        if (!locId) {
+          el.innerHTML = '<div style="color:var(--toupee);font-size:13px;padding:8px 0">Select a location above to see its tasks.</div>';
+          return;
+        }
+        // Show global tasks (with exclusion toggle) + location-specific tasks
+        const [{ data: globalTasks }, { data: localTasks }, { data: exclusions }] = await Promise.all([
+          db.from('tasks').select('*').is('location_id', null).order('order_index'),
+          db.from('tasks').select('*').eq('location_id', locId).order('order_index'),
+          db.from('task_exclusions').select('task_id').eq('location_id', locId)
+        ]);
+        const excludedIds = new Set((exclusions || []).map(e => e.task_id));
+        renderTaskList(globalTasks || [], locId, excludedIds, localTasks || []);
+      }
+    }
+
+    function renderTaskList(globalTasks, locId, excludedIds = new Set(), localTasks = []) {
       const el = document.getElementById('task-list');
       el.innerHTML = '';
-      (tasks || []).forEach(t => {
+
+      if (locId) {
+        // Section: global tasks with per-location toggle
+        const globalHeader = document.createElement('div');
+        globalHeader.style = 'font-size:12px;font-weight:600;color:var(--toupee);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px';
+        globalHeader.textContent = 'Global Tasks (shown at this store unless hidden)';
+        el.appendChild(globalHeader);
+      }
+
+      globalTasks.forEach(t => {
+        const isExcluded = excludedIds.has(t.id);
         const row = document.createElement('div');
-        row.className = `admin-task-row${t.active ? '' : ' inactive'}`;
+        row.className = `admin-task-row${!t.active || isExcluded ? ' inactive' : ''}`;
         row.innerHTML = `
           <span class="admin-task-name">${t.name}</span>
+          <span class="badge ${t.location_id === null ? 'badge-gray' : 'badge-yellow'}" style="font-size:11px">All Stores</span>
+          ${locId ? `
+            <button class="btn btn-sm ${isExcluded ? 'btn-green' : 'btn-danger'}"
+              onclick="toggleExclusion(${t.id}, ${locId}, ${isExcluded})">
+              ${isExcluded ? 'Show at This Store' : 'Hide at This Store'}
+            </button>
+          ` : ''}
           <button class="btn btn-outline btn-sm" onclick="toggleTask(${t.id}, ${t.active})">
             ${t.active ? 'Deactivate' : 'Activate'}
           </button>
@@ -150,6 +242,43 @@
         `;
         el.appendChild(row);
       });
+
+      if (locId && localTasks.length > 0) {
+        const localHeader = document.createElement('div');
+        localHeader.style = 'font-size:12px;font-weight:600;color:var(--toupee);text-transform:uppercase;letter-spacing:0.05em;margin:16px 0 8px';
+        localHeader.textContent = 'Store-Specific Tasks';
+        el.appendChild(localHeader);
+
+        localTasks.forEach(t => {
+          const row = document.createElement('div');
+          row.className = `admin-task-row${t.active ? '' : ' inactive'}`;
+          row.innerHTML = `
+            <span class="admin-task-name">${t.name}</span>
+            <span class="badge badge-yellow" style="font-size:11px">This Store Only</span>
+            <button class="btn btn-outline btn-sm" onclick="toggleTask(${t.id}, ${t.active})">
+              ${t.active ? 'Deactivate' : 'Activate'}
+            </button>
+            <button class="btn btn-danger btn-sm" onclick="deleteTask(${t.id})">Delete</button>
+          `;
+          el.appendChild(row);
+        });
+      }
+
+      if (locId && localTasks.length === 0) {
+        const note = document.createElement('div');
+        note.style = 'color:var(--toupee);font-size:13px;margin-top:16px';
+        note.textContent = 'No store-specific tasks yet. Add one using the form below.';
+        el.appendChild(note);
+      }
+    }
+
+    async function toggleExclusion(taskId, locId, isCurrentlyExcluded) {
+      if (isCurrentlyExcluded) {
+        await db.from('task_exclusions').delete().eq('task_id', taskId).eq('location_id', locId);
+      } else {
+        await db.from('task_exclusions').insert({ task_id: taskId, location_id: locId });
+      }
+      loadTasks();
     }
 
     async function toggleTask(id, current) {
@@ -167,9 +296,20 @@
       const input = document.getElementById('new-task-name');
       const name = input.value.trim();
       if (!name) return;
-      const { data: tasks } = await db.from('tasks').select('order_index').order('order_index', { ascending: false }).limit(1);
-      const nextOrder = tasks?.[0]?.order_index + 1 || 1;
-      await db.from('tasks').insert({ name, order_index: nextOrder });
+
+      let locationId = null;
+      if (currentTaskScope === 'local') {
+        locationId = document.getElementById('task-location-filter').value || null;
+        if (!locationId) { alert('Select a location first.'); return; }
+      }
+
+      const { data: existing } = await db.from('tasks')
+        .select('order_index')
+        .order('order_index', { ascending: false })
+        .limit(1);
+      const nextOrder = (existing?.[0]?.order_index || 0) + 1;
+
+      await db.from('tasks').insert({ name, order_index: nextOrder, location_id: locationId });
       input.value = '';
       loadTasks();
     }

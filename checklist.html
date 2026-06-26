@@ -72,9 +72,17 @@
       document.title = `${loc?.name} – Opening Checklist`;
       document.getElementById('loc-date').textContent = formatDate(todayDate());
 
-      const { data: taskData } = await db.from('tasks')
-        .select('*').eq('active', true).order('order_index');
-      tasks = taskData || [];
+      // Load global tasks + location-specific tasks, minus any exclusions
+      const [{ data: globalTasks }, { data: localTasks }, { data: exclusions }] = await Promise.all([
+        db.from('tasks').select('*').eq('active', true).is('location_id', null).order('order_index'),
+        db.from('tasks').select('*').eq('active', true).eq('location_id', locationId).order('order_index'),
+        db.from('task_exclusions').select('task_id').eq('location_id', locationId)
+      ]);
+      const excludedIds = new Set((exclusions || []).map(e => e.task_id));
+      tasks = [
+        ...(globalTasks || []).filter(t => !excludedIds.has(t.id)),
+        ...(localTasks || [])
+      ];
 
       const { data: sub } = await db.from('submissions')
         .select('*').eq('location_id', locationId).eq('date', todayDate()).maybeSingle();
