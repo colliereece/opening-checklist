@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GBGS Opening Checklist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="topnav">
+    <a class="topnav-brand" href="index.html">GBGS OPENING CHECKLIST</a>
+    <div class="topnav-links">
+      <a href="admin.html">Admin</a>
+    </div>
+  </nav>
+  <div class="grad-bar"></div>
+
+  <div class="page">
+    <div class="page-header">
+      <h1>Select Your Location</h1>
+      <p>Choose your store to start today's opening checklist</p>
+    </div>
+    <div id="location-grid" class="location-grid">
+      <div class="loading">Loading locations…</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    async function load() {
+      const today = todayDate();
+
+      const { data: locations } = await db.from('locations')
+        .select('*').eq('active', true).order('sort_order');
+
+      const { data: submissions } = await db.from('submissions')
+        .select('location_id, completed, completed_count, total_tasks')
+        .eq('date', today);
+
+      const statusMap = {};
+      (submissions || []).forEach(s => { statusMap[s.location_id] = s; });
+
+      const grid = document.getElementById('location-grid');
+      grid.innerHTML = '';
+
+      (locations || []).forEach(loc => {
+        const sub = statusMap[loc.id];
+        let dotClass = 'dot-gray';
+        let statusText = 'Not started';
+
+        if (sub) {
+          if (sub.completed) {
+            dotClass = 'dot-green';
+            statusText = 'Complete ✓';
+          } else if (sub.completed_count > 0) {
+            dotClass = 'dot-yellow';
+            statusText = `${sub.completed_count}/${sub.total_tasks} done`;
+          } else {
+            dotClass = 'dot-yellow';
+            statusText = 'In progress';
+          }
+        }
+
+        const card = document.createElement('a');
+        card.className = 'location-card';
+        card.href = `checklist.html?id=${loc.id}`;
+        card.innerHTML = `
+          <div class="location-card-name">${loc.name}</div>
+          <div class="location-card-status">
+            <span class="dot ${dotClass}"></span>
+            <span style="color:var(--toupee)">${statusText}</span>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    load();
+  </script>
+</body>
+</html>

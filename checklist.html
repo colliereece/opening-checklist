@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Opening Checklist – GBGS</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="topnav">
+    <a class="topnav-brand" href="index.html">GBGS OPENING CHECKLIST</a>
+  </nav>
+  <div class="grad-bar"></div>
+
+  <div class="page">
+    <a class="back-link" href="index.html">
+      ← All Locations
+    </a>
+
+    <div id="completion-banner" class="completion-banner" style="display:none">
+      <div class="completion-icon">🎉</div>
+      <div>
+        <div class="completion-title">Checklist Complete!</div>
+        <div class="completion-sub" id="completion-time"></div>
+      </div>
+    </div>
+
+    <div class="checklist-header">
+      <div>
+        <div class="checklist-location" id="loc-name">Loading…</div>
+        <div class="checklist-date" id="loc-date"></div>
+      </div>
+      <div class="progress-ring">
+        <div>
+          <div class="progress-fraction"><span id="done-count">0</span>/<span id="total-count">0</span></div>
+          <div class="progress-label">tasks complete</div>
+        </div>
+        <div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="task-list" class="task-list">
+      <div class="loading">Loading checklist…</div>
+    </div>
+
+    <div id="action-area" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px"></div>
+
+    <div style="margin-top:32px;display:flex;gap:12px;flex-wrap:wrap">
+      <a id="history-link" href="#" class="btn btn-outline btn-sm">View History</a>
+      <a id="calendar-link" href="#" class="btn btn-outline btn-sm">Calendar View</a>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    let locationId, submissionId, tasks = [], submissionTasks = {};
+
+    async function load() {
+      locationId = getParam('id');
+      if (!locationId) { window.location = 'index.html'; return; }
+
+      document.getElementById('history-link').href = `history.html?id=${locationId}`;
+      document.getElementById('calendar-link').href = `calendar.html?id=${locationId}`;
+
+      const { data: loc } = await db.from('locations').select('name').eq('id', locationId).single();
+      document.getElementById('loc-name').textContent = loc?.name || 'Unknown';
+      document.title = `${loc?.name} – Opening Checklist`;
+      document.getElementById('loc-date').textContent = formatDate(todayDate());
+
+      const { data: taskData } = await db.from('tasks')
+        .select('*').eq('active', true).order('order_index');
+      tasks = taskData || [];
+
+      const { data: sub } = await db.from('submissions')
+        .select('*').eq('location_id', locationId).eq('date', todayDate()).maybeSingle();
+
+      if (sub) {
+        submissionId = sub.id;
+        const { data: items } = await db.from('submission_tasks')
+          .select('*').eq('submission_id', sub.id);
+        (items || []).forEach(i => { submissionTasks[i.task_id] = i; });
+
+        if (sub.completed) {
+          showCompletionBanner(sub.completed_at);
+        }
+      }
+
+      renderTasks();
+    }
+
+    function renderTasks() {
+      const list = document.getElementById('task-list');
+      list.innerHTML = '';
+      let doneCount = 0;
+
+      tasks.forEach(task => {
+        const st = submissionTasks[task.id];
+        const isDone = st?.completed || false;
+        if (isDone) doneCount++;
+
+        const item = document.createElement('div');
+        item.className = `task-item${isDone ? ' done' : ''}`;
+        item.dataset.taskId = task.id;
+        item.innerHTML = `
+          <div class="custom-checkbox">
+            <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
+              <path d="M1 5L5 9L13 1" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <span class="task-name">${task.name}</span>
+          <span class="task-time">${st?.completed_at ? formatTime(st.completed_at) : ''}</span>
+        `;
+        item.addEventListener('click', () => toggleTask(task, item));
+        list.appendChild(item);
+      });
+
+      updateProgress(doneCount, tasks.length);
+      renderActionArea(doneCount, tasks.length);
+    }
+
+    function updateProgress(done, total) {
+      document.getElementById('done-count').textContent = done;
+      document.getElementById('total-count').textContent = total;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      document.getElementById('progress-fill').style.width = pct + '%';
+    }
+
+    function renderActionArea(done, total) {
+      const area = document.getElementById('action-area');
+      const isComplete = document.getElementById('completion-banner').style.display !== 'none';
+      if (isComplete) { area.innerHTML = ''; return; }
+
+      area.innerHTML = '';
+      if (done > 0) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-gradient';
+        btn.textContent = done === total ? '✓ Mark Checklist Complete' : `Submit (${total - done} remaining)`;
+        btn.addEventListener('click', submitChecklist);
+        area.appendChild(btn);
+      }
+    }
+
+    async function toggleTask(task, item) {
+      const banner = document.getElementById('completion-banner');
+      if (banner.style.display !== 'none') return;
+
+      const st = submissionTasks[task.id];
+      const nowDone = !st?.completed;
+
+      if (!submissionId) {
+        const { data: newSub, error } = await db.from('submissions').insert({
+          location_id: locationId,
+          date: todayDate(),
+          total_tasks: tasks.length,
+          completed_count: 0
+        }).select().single();
+        if (error) { console.error(error); return; }
+        submissionId = newSub.id;
+      }
+
+      if (st) {
+        await db.from('submission_tasks').update({
+          completed: nowDone,
+          completed_at: nowDone ? new Date().toISOString() : null
+        }).eq('id', st.id);
+        submissionTasks[task.id] = { ...st, completed: nowDone, completed_at: nowDone ? new Date().toISOString() : null };
+      } else {
+        const { data: newItem } = await db.from('submission_tasks').insert({
+          submission_id: submissionId,
+          task_id: task.id,
+          task_name: task.name,
+          completed: nowDone,
+          completed_at: nowDone ? new Date().toISOString() : null
+        }).select().single();
+        submissionTasks[task.id] = newItem;
+      }
+
+      const doneCount = Object.values(submissionTasks).filter(s => s.completed).length;
+      await db.from('submissions').update({ completed_count: doneCount }).eq('id', submissionId);
+
+      renderTasks();
+    }
+
+    async function submitChecklist() {
+      if (!submissionId) return;
+      const now = new Date().toISOString();
+      await db.from('submissions').update({
+        completed: true,
+        completed_at: now
+      }).eq('id', submissionId);
+      showCompletionBanner(now);
+      document.getElementById('action-area').innerHTML = '';
+    }
+
+    function showCompletionBanner(completedAt) {
+      const banner = document.getElementById('completion-banner');
+      banner.style.display = 'flex';
+      document.getElementById('completion-time').textContent =
+        `Completed at ${formatTime(completedAt)} · Great work!`;
+    }
+
+    load();
+  </script>
+</body>
+</html>

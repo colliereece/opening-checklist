@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>History – GBGS Opening Checklist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="topnav">
+    <a class="topnav-brand" href="index.html">GBGS OPENING CHECKLIST</a>
+  </nav>
+  <div class="grad-bar"></div>
+
+  <div class="page">
+    <a class="back-link" href="index.html">← All Locations</a>
+
+    <div class="page-header">
+      <h1 id="loc-name">History</h1>
+      <p id="loc-sub">Past opening checklists</p>
+    </div>
+
+    <div class="subnav">
+      <a id="checklist-link" href="#">Today's Checklist</a>
+      <a id="calendar-link" href="#">Calendar View</a>
+      <a href="#" class="active">History</a>
+    </div>
+
+    <div id="history-list" class="history-list">
+      <div class="loading">Loading history…</div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    async function load() {
+      const id = getParam('id');
+      if (!id) { window.location = 'index.html'; return; }
+
+      document.getElementById('checklist-link').href = `checklist.html?id=${id}`;
+      document.getElementById('calendar-link').href = `calendar.html?id=${id}`;
+
+      const { data: loc } = await db.from('locations').select('name').eq('id', id).single();
+      document.getElementById('loc-name').textContent = (loc?.name || '') + ' – History';
+      document.title = `${loc?.name} History – GBGS`;
+
+      const { data: subs } = await db.from('submissions')
+        .select('*')
+        .eq('location_id', id)
+        .neq('date', todayDate())
+        .order('date', { ascending: false })
+        .limit(90);
+
+      const list = document.getElementById('history-list');
+
+      if (!subs || subs.length === 0) {
+        list.innerHTML = '<div class="loading">No history yet.</div>';
+        return;
+      }
+
+      list.innerHTML = '';
+
+      for (const sub of subs) {
+        const badgeClass = sub.completed ? 'badge-green' : 'badge-red';
+        const badgeText = sub.completed ? '✓ Complete' : `✗ Incomplete`;
+        const meta = sub.completed
+          ? `Completed at ${formatTime(sub.completed_at)}`
+          : `${sub.completed_count}/${sub.total_tasks} tasks done`;
+
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        item.innerHTML = `
+          <div class="history-item-header" onclick="toggleDetail(this)">
+            <div>
+              <div class="history-date">${formatDate(sub.date)}</div>
+              <div class="history-meta">${meta}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span class="badge ${badgeClass}">${badgeText}</span>
+              <span style="color:var(--toupee);font-size:18px" class="chevron">›</span>
+            </div>
+          </div>
+          <div class="history-detail" data-sub-id="${sub.id}"></div>
+        `;
+        list.appendChild(item);
+      }
+    }
+
+    async function toggleDetail(header) {
+      const detail = header.nextElementSibling;
+      const chevron = header.querySelector('.chevron');
+      const isOpen = detail.classList.contains('open');
+
+      if (isOpen) {
+        detail.classList.remove('open');
+        chevron.style.transform = '';
+        return;
+      }
+
+      detail.classList.add('open');
+      chevron.style.transform = 'rotate(90deg)';
+
+      if (detail.dataset.loaded) return;
+      detail.dataset.loaded = true;
+      detail.innerHTML = '<div style="color:var(--toupee);font-size:13px;padding:4px 0">Loading…</div>';
+
+      const { data: items } = await db.from('submission_tasks')
+        .select('*').eq('submission_id', detail.dataset.subId);
+
+      if (!items || items.length === 0) {
+        detail.innerHTML = '<div style="color:var(--toupee);font-size:13px">No task data recorded.</div>';
+        return;
+      }
+
+      detail.innerHTML = items.map(i => `
+        <div class="history-task-row ${i.completed ? 'done' : ''}">
+          <span>${i.completed ? '✓' : '✗'}</span>
+          <span>${i.task_name}</span>
+          ${i.completed_at ? `<span style="margin-left:auto;font-size:11px">${formatTime(i.completed_at)}</span>` : ''}
+        </div>
+      `).join('');
+    }
+
+    load();
+  </script>
+</body>
+</html>

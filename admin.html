@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin – GBGS Opening Checklist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="topnav">
+    <a class="topnav-brand" href="index.html">GBGS OPENING CHECKLIST</a>
+    <div class="topnav-links">
+      <a href="index.html">← Back to App</a>
+      <a href="#" id="logout-btn" style="display:none" onclick="logout()">Log Out</a>
+    </div>
+  </nav>
+  <div class="grad-bar"></div>
+
+  <!-- LOGIN -->
+  <div id="login-view" class="admin-login">
+    <h1>Admin Login</h1>
+    <p>Ops & GM access only</p>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input class="form-input" type="email" id="email" placeholder="you@theescapegame.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password</label>
+      <input class="form-input" type="password" id="password" placeholder="••••••••"
+        onkeydown="if(event.key==='Enter') doLogin()">
+    </div>
+    <button class="btn btn-gradient" style="width:100%;justify-content:center;margin-top:8px" onclick="doLogin()">
+      Sign In
+    </button>
+    <div id="login-error" class="error-msg"></div>
+  </div>
+
+  <!-- ADMIN PANEL -->
+  <div id="admin-panel" class="page admin-panel">
+    <div class="page-header">
+      <h1>Admin Panel</h1>
+      <p id="admin-email-display"></p>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('tasks', this)">Tasks</button>
+      <button class="tab-btn" onclick="switchTab('locations', this)">Locations</button>
+      <button class="tab-btn" onclick="switchTab('overview', this)">Today's Overview</button>
+    </div>
+
+    <!-- TASKS TAB -->
+    <div id="tab-tasks" class="tab-content active">
+      <h2 style="margin-bottom:16px">Manage Tasks</h2>
+      <p style="color:var(--toupee);font-size:14px;margin-bottom:20px">
+        These tasks apply to all locations. Deactivating a task hides it from future checklists but preserves history.
+      </p>
+      <div id="task-list"></div>
+      <div class="add-task-form" style="margin-top:16px">
+        <input class="form-input" type="text" id="new-task-name" placeholder="New task name…"
+          onkeydown="if(event.key==='Enter') addTask()">
+        <button class="btn btn-gradient btn-sm" onclick="addTask()">+ Add Task</button>
+      </div>
+    </div>
+
+    <!-- LOCATIONS TAB -->
+    <div id="tab-locations" class="tab-content">
+      <h2 style="margin-bottom:16px">Manage Locations</h2>
+      <p style="color:var(--toupee);font-size:14px;margin-bottom:20px">
+        Update location names to match your actual stores. Changes take effect immediately.
+      </p>
+      <div id="location-list"></div>
+    </div>
+
+    <!-- OVERVIEW TAB -->
+    <div id="tab-overview" class="tab-content">
+      <h2 style="margin-bottom:16px">Today's Overview</h2>
+      <p style="color:var(--toupee);font-size:14px;margin-bottom:20px" id="overview-date"></p>
+      <table class="overview-table">
+        <thead>
+          <tr>
+            <th>Location</th>
+            <th>Status</th>
+            <th>Progress</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="overview-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    async function doLogin() {
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('login-error');
+      errEl.textContent = '';
+
+      const { data, error } = await db.auth.signInWithPassword({ email, password });
+      if (error) {
+        errEl.textContent = 'Invalid email or password.';
+        return;
+      }
+      showPanel(data.user.email);
+    }
+
+    async function checkSession() {
+      const { data: { session } } = await db.auth.getSession();
+      if (session) showPanel(session.user.email);
+    }
+
+    function showPanel(email) {
+      document.getElementById('login-view').style.display = 'none';
+      document.getElementById('admin-panel').classList.add('visible');
+      document.getElementById('logout-btn').style.display = 'inline';
+      document.getElementById('admin-email-display').textContent = `Signed in as ${email}`;
+      loadTasks();
+      loadLocations();
+    }
+
+    async function logout() {
+      await db.auth.signOut();
+      location.reload();
+    }
+
+    function switchTab(name, btn) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`tab-${name}`).classList.add('active');
+      if (name === 'overview') loadOverview();
+    }
+
+    // ---- TASKS ----
+    async function loadTasks() {
+      const { data: tasks } = await db.from('tasks').select('*').order('order_index');
+      const el = document.getElementById('task-list');
+      el.innerHTML = '';
+      (tasks || []).forEach(t => {
+        const row = document.createElement('div');
+        row.className = `admin-task-row${t.active ? '' : ' inactive'}`;
+        row.innerHTML = `
+          <span class="admin-task-name">${t.name}</span>
+          <button class="btn btn-outline btn-sm" onclick="toggleTask(${t.id}, ${t.active})">
+            ${t.active ? 'Deactivate' : 'Activate'}
+          </button>
+          <button class="btn btn-danger btn-sm" onclick="deleteTask(${t.id})">Delete</button>
+        `;
+        el.appendChild(row);
+      });
+    }
+
+    async function toggleTask(id, current) {
+      await db.from('tasks').update({ active: !current }).eq('id', id);
+      loadTasks();
+    }
+
+    async function deleteTask(id) {
+      if (!confirm('Delete this task? This cannot be undone.')) return;
+      await db.from('tasks').delete().eq('id', id);
+      loadTasks();
+    }
+
+    async function addTask() {
+      const input = document.getElementById('new-task-name');
+      const name = input.value.trim();
+      if (!name) return;
+      const { data: tasks } = await db.from('tasks').select('order_index').order('order_index', { ascending: false }).limit(1);
+      const nextOrder = tasks?.[0]?.order_index + 1 || 1;
+      await db.from('tasks').insert({ name, order_index: nextOrder });
+      input.value = '';
+      loadTasks();
+    }
+
+    // ---- LOCATIONS ----
+    async function loadLocations() {
+      const { data: locs } = await db.from('locations').select('*').order('sort_order');
+      const el = document.getElementById('location-list');
+      el.innerHTML = '';
+      (locs || []).forEach(loc => {
+        const row = document.createElement('div');
+        row.className = 'admin-location-row';
+        row.innerHTML = `
+          <span style="color:var(--toupee);font-size:12px;min-width:28px">#${loc.sort_order}</span>
+          <input class="edit-input" type="text" value="${loc.name}" id="loc-name-${loc.id}"
+            onkeydown="if(event.key==='Enter') saveLoc(${loc.id})">
+          <button class="btn btn-outline btn-sm" onclick="saveLoc(${loc.id})">Save</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleLoc(${loc.id}, ${loc.active})"
+            style="${loc.active ? '' : 'color:var(--red)'}">
+            ${loc.active ? 'Active' : 'Hidden'}
+          </button>
+        `;
+        el.appendChild(row);
+      });
+    }
+
+    async function saveLoc(id) {
+      const name = document.getElementById(`loc-name-${id}`).value.trim();
+      if (!name) return;
+      await db.from('locations').update({ name }).eq('id', id);
+    }
+
+    async function toggleLoc(id, current) {
+      await db.from('locations').update({ active: !current }).eq('id', id);
+      loadLocations();
+    }
+
+    // ---- OVERVIEW ----
+    async function loadOverview() {
+      const today = todayDate();
+      document.getElementById('overview-date').textContent = formatDate(today);
+
+      const { data: locs } = await db.from('locations').select('*').eq('active', true).order('sort_order');
+      const { data: subs } = await db.from('submissions')
+        .select('*').eq('date', today);
+
+      const subMap = {};
+      (subs || []).forEach(s => { subMap[s.location_id] = s; });
+
+      const tbody = document.getElementById('overview-body');
+      tbody.innerHTML = '';
+
+      (locs || []).forEach(loc => {
+        const sub = subMap[loc.id];
+        let badge, progress, time;
+
+        if (!sub) {
+          badge = '<span class="badge badge-gray">Not Started</span>';
+          progress = '—';
+          time = '—';
+        } else if (sub.completed) {
+          badge = '<span class="badge badge-green">✓ Complete</span>';
+          progress = `${sub.completed_count}/${sub.total_tasks}`;
+          time = formatTime(sub.completed_at);
+        } else {
+          badge = '<span class="badge badge-yellow">In Progress</span>';
+          progress = `${sub.completed_count}/${sub.total_tasks}`;
+          time = '—';
+        }
+
+        tbody.innerHTML += `
+          <tr>
+            <td><a href="checklist.html?id=${loc.id}" style="color:var(--white);text-decoration:none">${loc.name}</a></td>
+            <td>${badge}</td>
+            <td>${progress}</td>
+            <td style="color:var(--toupee)">${time}</td>
+          </tr>
+        `;
+      });
+    }
+
+    checkSession();
+  </script>
+</body>
+</html>
